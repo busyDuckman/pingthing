@@ -63,6 +63,7 @@ class Host:
     mac_done: bool = False
     vendor: MACInfo | None = None
     ports: list[int] | None = None  # None until scanned
+    full_scanned: bool = False  # all ports checked, from the host window
     # when to retry a lookup that found nothing (time.monotonic), never until one has failed
     name_attempts: int = 0
     name_retry_at: float = math.inf
@@ -234,4 +235,6 @@ class Monitor:
             if host.ports is None:
                 host.ports = []  # show nothing found, rather than scanning, until a retry knows better
         else:
-            host.ports = ports
+            # the quick scan only checks common ports, keep any others a full scan found
+            others = [p for p in host.ports or [] if p not in probe.tcp_ports_we_care_about]
+            host.ports = sorted(ports + others)

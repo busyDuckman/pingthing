@@ -518,10 +518,13 @@ class HostScreen(ModalScreen):
         found_before = set(self.host.ports or [])
         found = await probe.full_port_scan(self.host.ip, progress=progress)
         for port in found:
-            new = "" if port in found_before else "  (new)"
-            log.write_line(f"{port:>5}  {probe.port_name(port)}{new}")
+            # we can only say a port is new if an earlier scan checked it: the quick scan only checks common ports
+            checked_before = self.host.full_scanned or port in probe.tcp_ports_we_care_about
+            new = "  (newly discovered)" if checked_before and port not in found_before else ""
+            log.write_line(f"{port:>5}  {probe.tcp_ports_we_care_about.get(port, '?')}{new}")
         log.write_line(f"{len(found)} open port{'' if len(found) == 1 else 's'}")
         self.host.ports = found
+        self.host.full_scanned = True
 
     def action_traceroute(self):
         log = self._open_tool("traceroute")

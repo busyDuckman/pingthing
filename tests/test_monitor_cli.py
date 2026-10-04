@@ -112,3 +112,15 @@ def test_args():
 def test_bad_args(argv):
     with pytest.raises(SystemExit):
         parse_args(argv)
+
+
+async def test_quick_rescan_keeps_uncommon_ports_from_a_full_scan(monkeypatch):
+    async def quick_port_scan(ip):
+        return [22]
+    monkeypatch.setattr(probe, "quick_port_scan", quick_port_scan)
+
+    m = make_monitor()
+    host = m.add_host("10.0.0.5")
+    host.ports = [22, 80, 12345]  # from a full scan
+    await m._scan_ports(host)
+    assert host.ports == [22, 12345]  # 80 is common, and now closed
