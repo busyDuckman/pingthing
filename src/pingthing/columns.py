@@ -10,6 +10,7 @@ Cells carry a meaning (good, slow, bad...) rather than a colour, the palette dec
 
 import ipaddress
 import math
+import re
 import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
@@ -157,6 +158,14 @@ class UIContext(NamedTuple):
     gateway: str | None
     own_address: str | None
     now: float
+    hide_macs: bool = False  # for screenshots
+
+
+def mask_mac(mac: str) -> str:
+    """
+    Hide the device part of a MAC address, keeping the manufacturer part (the first three octets).
+    """
+    return mac[:9] + re.sub(r'[0-9A-Fa-f]', '░', mac[9:])
 
 
 class ColConfig(NamedTuple):
@@ -253,7 +262,8 @@ def format_services(w: int, host: Host, ctx: UIContext) -> Cell:
 def format_mac(w: int, host: Host, ctx: UIContext) -> Cell:
     if not host.mac_done:
         return Cell(fit('scanning', w), 'pending')
-    return Cell(fit(host.mac or 'n/a', w), 'dim')
+    mac = host.mac or 'n/a'
+    return Cell(fit(mask_mac(mac) if ctx.hide_macs and host.mac else mac, w), 'dim')
 
 
 def manufacturer_text(host: Host) -> str:

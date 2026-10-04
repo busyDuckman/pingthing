@@ -86,6 +86,12 @@ def test_histogram_shows_every_bucket():
     assert len(histogram_rows(PingStats(), 10)) == 11
 
 
+def test_screen_shot_mode_hides_the_device_part_of_macs():
+    host = make_busy_host()
+    ctx = UIContext(gateway=None, own_address=None, now=1000.0, hide_macs=True)
+    assert col_config['mac'].print_func(17, host, ctx).txt == "02:00:00:░░:░░:░░"
+
+
 def test_search_matches_any_detail():
     host = make_busy_host()
     assert matches(host, "10.0.0")

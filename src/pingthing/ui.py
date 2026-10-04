@@ -46,6 +46,7 @@ from pingthing.columns import (
     format_ms,
     histogram_rows,
     manufacturer_text,
+    mask_mac,
     matches,
     ping_kind,
     services_text,
@@ -426,7 +427,8 @@ class HostScreen(ModalScreen):
         services = services_text(host) if host.ports is not None else "scanning..."
         self.query_one("#facts", Static).update(
             f"[b]{escape(host.ip)}[/b]{role}  {escape(name or '(unknown name)')}\n"
-            f"mac {escape(mac or 'n/a')}  {escape(manufacturer_text(host))}\n"
+            f"mac {escape((mask_mac(mac) if self.ctx.hide_macs and mac else mac) or 'n/a')}  "
+            f"{escape(manufacturer_text(host))}\n"
             f"services {escape(services or 'none found')}\n"
             f"ping {ms(stats.last_ping)}  ave {ms(stats.mean if stats.n else None)}  "
             f"min {ms(stats.min)}  max {ms(stats.max)}  sd {format_ms(stats.sd_sample() if stats.n > 1 else None)}"
@@ -538,13 +540,14 @@ class PingThingApp(App):
     ]
 
     def __init__(self, monitor: Monitor, view: list[str], bw: bool = False,
-                 gateway: str | None = None, own_address: str | None = None):
+                 gateway: str | None = None, own_address: str | None = None, hide_macs: bool = False):
         super().__init__()
         self.monitor = monitor
         self.palette = Palette(bw)
         self.view = view
         self.gateway = gateway
         self.own_address = own_address
+        self.hide_macs = hide_macs
         self.paused = False
         self.prompt_mode: str | None = None  # "search" or "filter" while the prompt is open
         self.filter_text = ""
@@ -569,7 +572,7 @@ class PingThingApp(App):
 
     # --- drawing ------------------------------------------------------------------------------------------------------
     def _ui_context(self) -> UIContext:
-        return UIContext(self.gateway, self.own_address, time.time())
+        return UIContext(self.gateway, self.own_address, time.time(), self.hide_macs)
 
     def _function_keys(self) -> str:
         parts = []
