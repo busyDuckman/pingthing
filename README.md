@@ -15,7 +15,8 @@ cumbersome. pingthing needs no configuration: run it, and it finds your network 
 
 > [!WARNING]
 > This util does port scanning and network discovery. If you run it on a corporate network, your IT department will
-> probably be unhappy with you.
+> probably be unhappy with you. It is meant for home and small office networks you own or are allowed to scan, not
+> for networks with industrial or safety equipment on them (PLCs, machine controllers and the like).
 
 ## Features
 - **Live latency per host.** Last, average, best, worst and standard deviation, colour coded, updated every couple of

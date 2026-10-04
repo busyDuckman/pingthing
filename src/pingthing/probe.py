@@ -287,11 +287,28 @@ async def full_port_scan(ip: str, time_out: float = 0.5, workers: int = 1024,
 # ----------------------------------------------------------------------------------------------------------------------
 # Web pages
 # ----------------------------------------------------------------------------------------------------------------------
-# Common ports that serve web pages. Other common ports are known not to, so aren't asked.
+# Checking a port for a web page means sending it a request, which is safe for nearly everything. These are kept
+# to a minimum anyway:
+#  - Common ports are only asked if they normally serve web pages.
+#  - Uncommon ports are only asked during a full port scan the user started.
+#  - Nothing is sent to a device that speaks first (a telnet or serial prompt, SSH, a banner), web servers never do.
+#  - Nothing is ever sent to the ports below.
+
+# Common ports that serve web pages
 WEB_PORTS = {80, 443, 631, 5000, 8080, 8443, 32400}
 
-# Never send anything to these: raw printer ports print whatever arrives, so a web request is a page of garbage.
-NEVER_PROBE = {515, *range(9100, 9110)}
+NEVER_PROBE = {
+    # raw printing, whatever arrives is printed
+    515, *range(9100, 9110),
+    # serial port bridges, whatever arrives goes down the cable: 3D printers, CNC and laser controllers, PLCs.
+    # ser2net, Moxa NPort data and command ports, Lantronix, cheap Wi-Fi serial modules (USR, Elfin), ESP-Link
+    *range(2000, 2004), *range(4001, 4017), *range(966, 982), *range(10001, 10017), 8899, 20108, 2323,
+    # industrial control, fragile devices that shouldn't get unexpected traffic: Siemens S7, Modbus, Red Lion,
+    # Niagara Fox, PCWorx, IEC 60870-5-104, Mitsubishi MELSEC, OMRON FINS, GE SRTP, DNP3, EtherNet/IP, BACnet
+    102, 502, 789, 1911, 4911, 1962, 2404, 5006, 5007, 9600, 18245, 18246, 20000, 44818, 47808,
+}
+
+LISTEN_TIME = 0.5  # seconds to wait, after connecting, to see if a device speaks first
 
 
 class WebPage(NamedTuple):
@@ -301,10 +318,35 @@ class WebPage(NamedTuple):
     title: str | None
 
 
-def worth_checking_for_web(port: int) -> bool:
+def worth_checking_for_web(port: int, include_uncommon: bool) -> bool:
+    """
+    :param include_uncommon: also ports outside our list of common ports, only for a scan the user started
+    """
     if port in NEVER_PROBE:
         return False
-    return port in WEB_PORTS or port not in tcp_ports_we_care_about
+    if port in tcp_ports_we_care_about:
+        return port in WEB_PORTS
+    return include_uncommon
+
+
+async def speaks_first(ip: str, port: int, listen_time: float = LISTEN_TIME) -> bool:
+    """
+    Connect without sending anything, and see if the device says something (or hangs up) before we do.
+    Web servers wait for a request, so anything that speaks first isn't one, and is best left alone.
+    """
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=listen_time * 4)
+    except (OSError, TimeoutError):
+        return True  # can't even connect, so don't go on to send anything
+    try:
+        await asyncio.wait_for(reader.read(1), timeout=listen_time)
+        return True  # it spoke, or closed the connection
+    except TimeoutError:
+        return False
+    except OSError:
+        return True
+    finally:
+        writer.close()
 
 
 _title_regex = re.compile(rb'<title[^>]*>(.*?)</title>', flags=re.IGNORECASE | re.DOTALL)
@@ -357,6 +399,8 @@ async def web_page(ip: str, port: int, time_out: float = 3) -> WebPage | None:
     The web page on an open port, if there is one.
     HTTPS is tried first, many HTTPS servers answer a plain request with an HTTP error, which would look like a page.
     """
+    if await speaks_first(ip, port):
+        return None
     for scheme in ("https", "http"):
         page = await _http_get(ip, port, scheme, time_out)
         if page is not None:
@@ -364,8 +408,12 @@ async def web_page(ip: str, port: int, time_out: float = 3) -> WebPage | None:
     return None
 
 
-async def find_web_pages(ip: str, ports: list[int], time_out: float = 3) -> list[WebPage]:
-    candidates = [p for p in ports if worth_checking_for_web(p)]
+async def find_web_pages(ip: str, ports: list[int], include_uncommon: bool = False,
+                         time_out: float = 3) -> list[WebPage]:
+    """
+    :param include_uncommon: also check ports outside our list of common ports, only for a scan the user started
+    """
+    candidates = [p for p in ports if worth_checking_for_web(p, include_uncommon)]
     pages = await asyncio.gather(*[web_page(ip, p, time_out) for p in candidates])
     return [page for page in pages if page is not None]
 

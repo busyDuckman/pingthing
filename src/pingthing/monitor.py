@@ -239,5 +239,8 @@ class Monitor:
             # the quick scan only checks common ports, keep any others a full scan found
             others = [p for p in host.ports or [] if p not in probe.tcp_ports_we_care_about]
             host.ports = sorted(ports + others)
+            # only common ports are checked in the background, keep pages a full scan found on other ports
             async with self._port_limit:
-                host.web_pages = await probe.find_web_pages(host.ip, host.ports)
+                pages = await probe.find_web_pages(host.ip, host.ports)
+            kept = [p for p in host.web_pages if p.port in others]
+            host.web_pages = sorted(pages + kept)

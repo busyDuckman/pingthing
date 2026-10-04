@@ -18,7 +18,7 @@ from pingthing.columns import (
 from pingthing.monitor import Host, Monitor
 from pingthing.probe import Pinger
 from pingthing.stats import PingFail, PingStats
-from pingthing.ui import HelpScreen, HostScreen, HostTable, PingThingApp
+from pingthing.ui import HelpScreen, HostScreen, HostTable, PingThingApp, WebCheckScreen
 
 
 @pytest.mark.parametrize("value, expected", [
@@ -174,3 +174,17 @@ async def test_host_window_and_help_open():
         assert app.screen.query_one("#pane", ContentSwitcher).current == "port_scan"
         await pilot.press("escape", "f1")
         assert isinstance(app.screen, HelpScreen)
+
+
+async def test_full_port_scan_asks_about_web_requests_first():
+    app = make_app()
+    async with app.run_test(size=(160, 40)) as pilot:
+        await pilot.press("down", "enter", "p")
+        assert isinstance(app.screen, WebCheckScreen)
+        assert app.focused.id == "yes"
+        await pilot.press("right")
+        assert app.focused.id == "no"
+        await pilot.press("left")
+        assert app.focused.id == "yes"
+        await pilot.press("escape")  # cancel, nothing is scanned
+        assert isinstance(app.screen, HostScreen) and "port_scan" not in app.screen._started

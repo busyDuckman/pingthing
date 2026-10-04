@@ -26,6 +26,7 @@ from textual.strip import Strip
 from textual.theme import Theme
 from textual.widget import Widget
 from textual.widgets import (
+    Button,
     ContentSwitcher,
     Input,
     Label,
@@ -353,6 +354,49 @@ class WebPagesScreen(ModalScreen[str]):
         self.dismiss(self.pages[event.option_index].url)
 
 
+class WebCheckScreen(ModalScreen[bool]):
+    """
+    Before a full port scan: ask whether to also send web requests to the open ports.
+    Dismissed with True (check), False (ports only), or None if escaped (cancel the scan).
+    """
+    BINDINGS = [
+        Binding("y", "answer(True)", "Check for web pages"),
+        Binding("n", "answer(False)", "Ports only"),
+        Binding("left", "app.focus_previous", show=False),
+        Binding("right", "app.focus_next", show=False),
+        Binding("escape,q", "dismiss", "Cancel"),
+    ]
+    DEFAULT_CSS = """
+    WebCheckScreen { align: center middle; }
+    WebCheckScreen > Vertical {
+        width: 72; max-width: 100%; height: auto; border: round $warning; background: $surface; padding: 0 1;
+    }
+    WebCheckScreen .buttons { height: auto; margin-top: 1; }
+    WebCheckScreen Button { margin-right: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical() as box:
+            box.border_title = "Send a web request to open ports to find web pages?"
+            yield Static(
+                "Caution: Poorly designed, or prototype, equipment can act on unexpected network traffic. "
+                "Don't do this on a network with industrial or safety equipment on it."
+            )
+            with Horizontal(classes="buttons"):
+                yield Button("Yes (y)", id="yes", compact=True)
+                yield Button("No (n)", id="no", compact=True)
+
+    def on_mount(self):
+        self.query_one("#yes", Button).focus()
+
+    def action_answer(self, check: bool):
+        self.dismiss(check)
+
+    @on(Button.Pressed)
+    def button(self, event: Button.Pressed):
+        self.dismiss(event.button.id == "yes")
+
+
 class SortScreen(ModalScreen[str]):
     """
     Pick a column to sort by.
@@ -524,13 +568,21 @@ class HostScreen(ModalScreen):
         return log
 
     def action_port_scan(self):
-        log = self._open_tool("port_scan")
-        if log is not None:
+        showing = self.query_one("#pane", ContentSwitcher).current == "port_scan"
+        if "port_scan" in self._started and not showing:
+            self._show("port_scan")  # just show the last scan
+            return
+
+        def chosen(check_web: bool | None):
+            if check_web is None:
+                return
+            log = self._open_tool("port_scan")
             log.write_line(f"Scanning all TCP ports on {self.host.ip}...")
-            self._port_scan(log)
+            self._port_scan(log, check_web)
+        self.app.push_screen(WebCheckScreen(), chosen)
 
     @work(exclusive=True, group="port_scan")
-    async def _port_scan(self, log: Log):
+    async def _port_scan(self, log: Log, check_web: bool):
         bar = self.query_one("#port_scan ProgressBar", ProgressBar)
         bar.update(progress=0)
         last_report = 0.0
@@ -543,8 +595,14 @@ class HostScreen(ModalScreen):
 
         found_before = set(self.host.ports or [])
         found = await probe.full_port_scan(self.host.ip, progress=progress)
-        log.write_line(f"Found {len(found)} open port{'' if len(found) == 1 else 's'}, checking them for web pages...")
-        pages = {page.port: page for page in await probe.find_web_pages(self.host.ip, found)}
+        if check_web:
+            log.write_line(f"Found {len(found)} open port{'' if len(found) == 1 else 's'}, "
+                           f"checking them for web pages...")
+            pages = {page.port: page for page in await probe.find_web_pages(self.host.ip, found,
+                                                                            include_uncommon=True)}
+        else:
+            # keep what we knew, for ports still open
+            pages = {page.port: page for page in self.host.web_pages if page.port in found}
         for port in found:
             # we can only say a port is new if an earlier scan checked it: the quick scan only checks common ports
             checked_before = self.host.full_scanned or port in probe.tcp_ports_we_care_about
@@ -552,7 +610,6 @@ class HostScreen(ModalScreen):
             page = pages.get(port)
             web = f"  *web page: {page.title or page.url}" if page else ""
             log.write_line(f"{port:>5}  {probe.tcp_ports_we_care_about.get(port, '?')}{new}{web}")
-        log.write_line(f"{len(found)} open port{'' if len(found) == 1 else 's'}, {len(pages)} with web pages")
         self.host.ports = found
         self.host.web_pages = list(pages.values())
         self.host.full_scanned = True

@@ -99,12 +99,15 @@ async def test_quick_scan_that_learns_nothing_returns_none(monkeypatch):
     assert await probe.quick_port_scan("10.0.0.5") is None
 
 
-def test_never_sends_web_requests_to_printer_ports():
-    assert not probe.worth_checking_for_web(9100)
-    assert not probe.worth_checking_for_web(9103)
-    assert not probe.worth_checking_for_web(22)  # known, and not web
-    assert probe.worth_checking_for_web(8080)
-    assert probe.worth_checking_for_web(12345)  # unknown, worth asking
+def test_which_ports_get_web_requests():
+    for include_uncommon in (False, True):
+        assert not probe.worth_checking_for_web(9100, include_uncommon)   # raw printing
+        assert not probe.worth_checking_for_web(4001, include_uncommon)   # serial bridge
+        assert not probe.worth_checking_for_web(502, include_uncommon)    # Modbus
+        assert not probe.worth_checking_for_web(22, include_uncommon)     # common, and not web
+        assert probe.worth_checking_for_web(8080, include_uncommon)
+    assert not probe.worth_checking_for_web(12345, include_uncommon=False)
+    assert probe.worth_checking_for_web(12345, include_uncommon=True)
 
 
 def test_parse_http_response():
@@ -124,7 +127,7 @@ async def test_finds_a_plain_http_page():
     server = await asyncio.start_server(serve, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     async with server:
-        pages = await probe.find_web_pages("127.0.0.1", [port], time_out=2)
+        pages = await probe.find_web_pages("127.0.0.1", [port], include_uncommon=True, time_out=2)
     assert pages == [probe.WebPage(port, f"http://127.0.0.1:{port}", "200 OK", "Test page")]
 
 
@@ -132,3 +135,20 @@ async def test_in_daemon_thread_returns_results_and_raises_errors():
     assert await probe.in_daemon_thread(sum, [1, 2, 3]) == 6
     with pytest.raises(ValueError):
         await probe.in_daemon_thread(int, "not a number")
+
+
+async def test_sends_nothing_to_a_device_that_speaks_first():
+    received = []
+
+    async def serve(reader, writer):
+        writer.write(b"Marlin ready\r\n")
+        await writer.drain()
+        received.append(await reader.read(100))
+        writer.close()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    async with server:
+        pages = await probe.find_web_pages("127.0.0.1", [port], include_uncommon=True, time_out=2)
+        await asyncio.sleep(0.1)
+    assert pages == [] and received == [b""]

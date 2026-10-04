@@ -13,7 +13,7 @@ from pingthing.probe import Pinger
 
 @pytest.fixture(autouse=True)
 def no_web_requests(monkeypatch):
-    async def find_web_pages(ip, ports):
+    async def find_web_pages(ip, ports, include_uncommon=False):
         return []
     monkeypatch.setattr(probe, "find_web_pages", find_web_pages)
 
@@ -105,6 +105,27 @@ async def test_rescan_looks_everything_up_again(monkeypatch):
         assert m.rescan()
     assert looked_up == ["10.0.0.5"] * 3
     assert m._first_pass and m._explore_pos == 0
+
+
+async def test_background_rescan_keeps_web_pages_on_uncommon_ports(monkeypatch):
+    asked = []
+
+    async def quick_port_scan(ip):
+        return [80]
+
+    async def find_web_pages(ip, ports, include_uncommon=False):
+        asked.append(include_uncommon)
+        return [probe.WebPage(80, "http://10.0.0.5", "200 OK", None)]
+    monkeypatch.setattr(probe, "quick_port_scan", quick_port_scan)
+    monkeypatch.setattr(probe, "find_web_pages", find_web_pages)
+
+    m = make_monitor()
+    host = m.add_host("10.0.0.5")
+    host.ports = [80, 12345]  # from a full scan
+    host.web_pages = [probe.WebPage(12345, "http://10.0.0.5:12345", "200 OK", None)]
+    await m._scan_ports(host)
+    assert asked == [False]  # never asks uncommon ports in the background
+    assert [p.port for p in host.web_pages] == [80, 12345]
 
 
 def test_args():
