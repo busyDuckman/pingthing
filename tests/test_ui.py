@@ -12,6 +12,7 @@ from pingthing.columns import (
     format_ms,
     histogram_rows,
     matches,
+    spark_column,
     time_since_as_str,
 )
 from pingthing.monitor import Host, Monitor
@@ -79,11 +80,32 @@ def test_histogram_shows_every_bucket():
     for v in [3.0, 3.5, 30.0, PingFail.TIMEOUT]:
         stats.add(v)
     rows = histogram_rows(stats, 10)
-    assert [label for label, _, _ in rows] == ["<1", "1-2", "2-5", "5-10", "10-20", "20-50", "50-100", "100-200",
-                                               "200-500", "500+", "failed"]
-    assert [count for _, count, _ in rows] == [0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 1]
-    assert rows[2][2] == "█" * 10 and rows[0][2] == ""
+    assert [r.label for r in rows] == ["<1", "1-2", "2-5", "5-10", "10-20", "20-50", "50-100", "100-200",
+                                       "200-500", "500+", "failed"]
+    assert [r.count for r in rows] == [0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 1]
+    assert rows[2].bar == "█" * 10 and rows[0].bar == ""
+    assert [r.kind for r in rows] == ['good'] * 3 + ['fine'] * 2 + ['slow'] * 2 + ['bad'] * 3 + ['fail']
     assert len(histogram_rows(PingStats(), 10)) == 11
+
+
+def test_short_histogram_drops_empty_buckets_from_both_ends():
+    stats = PingStats()
+    for v in [3.0, 30.0]:
+        stats.add(v)
+    assert [r.label for r in histogram_rows(stats, 10, max_rows=6)] == ["2-5", "5-10", "10-20", "20-50", "50-100",
+                                                                        "100-200"]
+    # never drops a bucket with data, even if it doesn't fit
+    assert [r.label for r in histogram_rows(stats, 10, max_rows=1)] == ["2-5", "5-10", "10-20", "20-50"]
+    # failures are always shown, and empty buckets either side of the data still go
+    stats.add(PingFail.TIMEOUT)
+    assert [r.label for r in histogram_rows(stats, 10, max_rows=6)] == ["2-5", "5-10", "10-20", "20-50", "50-100",
+                                                                        "failed"]
+
+
+def test_spark_column():
+    assert spark_column(10.0, 10.0, 2) == ["█", "█"]
+    assert spark_column(5.0, 10.0, 2) == [" ", "█"]
+    assert spark_column(PingFail.TIMEOUT, 10.0, 2) == [" ", "!"]
 
 
 def test_screen_shot_mode_hides_names_and_the_device_part_of_macs():

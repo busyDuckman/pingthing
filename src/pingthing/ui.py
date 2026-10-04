@@ -11,6 +11,7 @@ The monitor updates the hosts in the background, the UI reads them a couple of t
 import time
 
 from rich.segment import Segment
+from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -31,7 +32,6 @@ from textual.widgets import (
     Log,
     OptionList,
     ProgressBar,
-    Sparkline,
     Static,
 )
 
@@ -51,6 +51,7 @@ from pingthing.columns import (
     matches,
     ping_kind,
     services_text,
+    spark_column,
     time_since_as_str,
 )
 from pingthing.monitor import Host, Monitor
@@ -278,6 +279,33 @@ class HostTable(ScrollView, can_focus=True):
         self.select(row)
 
 
+class LatencyGraph(Widget):
+    """
+    The most recent pings, one per column, newest on the right. Coloured like the ping columns in the table.
+    """
+    def __init__(self, palette: Palette, **kwargs):
+        super().__init__(**kwargs)
+        self.palette = palette
+        self.pings: list = []
+
+    def show(self, pings: list):
+        self.pings = pings
+        self.refresh()
+
+    def render(self) -> Text:
+        width, height = self.size.width, self.size.height
+        pings = self.pings[-width:] if width else []
+        top = max((p for p in pings if not isinstance(p, PingFail)), default=0)
+        columns = [spark_column(p, top, height) for p in pings]
+        text = Text()
+        for row in range(height):
+            for ping, column in zip(pings, columns):
+                text.append(column[row], self.palette(ping_kind(ping), bold=isinstance(ping, PingFail)))
+            if row < height - 1:
+                text.append("\n")
+        return text
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Windows
 # ----------------------------------------------------------------------------------------------------------------------
@@ -346,7 +374,7 @@ class HostScreen(ModalScreen):
     #host .section { color: $text-muted; margin-top: 1; }
     #facts { height: auto; }
     #pane { height: 1fr; }
-    #graphs { height: 1fr; overflow-y: auto; }
+    #graphs { height: 1fr; }
     #graph { height: 1fr; min-height: 2; }
     #histogram { height: auto; }
     #pane Log { height: 1fr; border: round $panel; }
@@ -355,6 +383,7 @@ class HostScreen(ModalScreen):
 
     WEB_PORTS = [(443, "https"), (8443, "https"), (80, "http"), (8080, "http")]
     PANES = ("graphs", "port_scan", "traceroute")
+    GRAPH_OVERHEAD = 4 + 3  # the two section labels, and the smallest useful graph
     HINTS = [("graphs", "g graphs"), ("port_scan", "p port scan"), ("traceroute", "t traceroute"),
              ("copy", "c copy"), ("open_web", "w web"), ("close", "esc close")]
 
@@ -372,8 +401,8 @@ class HostScreen(ModalScreen):
             yield Static(id="facts")
             with ContentSwitcher(initial="graphs", id="pane"):
                 with Vertical(id="graphs"):
-                    yield Label("Latency, last pings (failed pings show as 0)", classes="section")
-                    yield Sparkline([], id="graph")
+                    yield Label("Latency, last pings (! is a failed ping)", classes="section")
+                    yield LatencyGraph(self.palette, id="graph")
                     yield Label("Histogram", classes="section")
                     yield Static(id="histogram")
                 with Vertical(id="port_scan"):
@@ -438,15 +467,15 @@ class HostScreen(ModalScreen):
             f"  up {up}  last outage {outage}  ({stats.n + stats.fails} pings)"
         )
 
-        # failed pings are drawn as 0, drawing them at the time out would flatten everything else
-        self.query_one("#graph", Sparkline).data = [
-            0 if isinstance(p, PingFail) else p for p in stats.history
-        ] or [0]
+        self.query_one("#graph", LatencyGraph).show(list(stats.history))
 
+        # in a short window the histogram gives up its empty buckets, leaving the graph a few rows
+        graphs_height = self.query_one("#graphs").size.height
+        max_rows = max(1, graphs_height - self.GRAPH_OVERHEAD) if graphs_height else None
         self.query_one("#histogram", Static).update("\n".join(
-            f"{label + ('' if label == 'failed' else ' ms'):>11} {count:6}  "
-            f"{self._coloured(bar, 'fail' if label == 'failed' else 'fine')}"
-            for label, count, bar in histogram_rows(stats, 50)
+            f"{row.label + ('' if row.label == 'failed' else ' ms'):>11} {row.count:6}  "
+            f"{self._coloured(row.bar, row.kind)}"
+            for row in histogram_rows(stats, 50, max_rows)
         ))
 
     def action_graphs(self):

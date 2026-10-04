@@ -79,15 +79,61 @@ def fit(txt: str, width: int, right: bool = False) -> str:
     return txt.rjust(width) if right else txt.ljust(width)
 
 
-def histogram_rows(stats: PingStats, bar_width: int) -> list[tuple[str, int, str]]:
+class HistogramRow(NamedTuple):
+    label: str
+    count: int
+    bar: str
+    kind: str  # the same kind (colour) as a ping in this bucket
+
+
+def histogram_rows(stats: PingStats, bar_width: int, max_rows: int | None = None) -> list[HistogramRow]:
     """
-    The ping histogram as (bucket label, count, bar) rows, every bucket and then the failed pings.
+    The ping histogram, every bucket and then the failed pings.
+
+    :param max_rows: if there are more rows than this, empty buckets are dropped from both ends to fit,
+                     and the failed row if there were no failures
     """
     edges = [0, *HISTOGRAM_EDGES, math.inf]
     labels = ["<1"] + [f"{lo}-{hi}" for lo, hi in zip(edges[1:-2], edges[2:-1])] + [f"{HISTOGRAM_EDGES[-1]}+"]
-    rows = [*zip(labels, stats.histogram), ("failed", stats.fails)]
-    most = max(count for _, count in rows) or 1
-    return [(label, count, "█" * math.ceil(bar_width * count / most)) for label, count in rows]
+    # a bucket is coloured like a ping just above its lower edge
+    kinds = [ping_kind(lo + 1e-6) for lo in edges[:-1]]
+    rows = list(zip(labels, stats.histogram, kinds))
+    show_failed = True
+
+    if max_rows is not None:
+        show_failed = stats.fails > 0 or len(rows) < max_rows
+        limit = max_rows - (1 if show_failed else 0)
+        while len(rows) > limit:
+            trimmed = False
+            for end in (0, -1):
+                if len(rows) > limit and rows[end][1] == 0:
+                    rows.pop(end)
+                    trimmed = True
+            if not trimmed:
+                break
+
+    if show_failed:
+        rows.append(("failed", stats.fails, 'fail'))
+
+    most = max((count for _, count, _ in rows), default=0) or 1
+    return [HistogramRow(label, count, "█" * math.ceil(bar_width * count / most), kind)
+            for label, count, kind in rows]
+
+
+SPARK_BLOCKS = " ▁▂▃▄▅▆▇█"
+
+
+def spark_column(ping: PingResult, top: float, height: int) -> list[str]:
+    """
+    One column of the latency graph, top row first. A failed ping is a '!' on the bottom row.
+    """
+    if isinstance(ping, PingFail):
+        return [" "] * (height - 1) + ["!"]
+    eighths = max(1, round(ping / top * height * 8)) if top > 0 else 1
+    column = []
+    for row in range(height - 1, -1, -1):
+        column.append(SPARK_BLOCKS[max(0, min(8, eighths - row * 8))])
+    return column
 
 
 # ----------------------------------------------------------------------------------------------------------------------
