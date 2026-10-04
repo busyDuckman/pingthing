@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pingthing"
+version = "0.2.0"
+description = "Summary of your local network, htop style."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Warren Creemers" }]
+requires-python = ">=3.11"
+keywords = ["network", "ping", "lan", "monitor", "tui"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: System Administrators",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = [
+    "asciimatics>=1.15",
+    "getmac>=0.9.5",
+    "icmplib>=3.0.4",
+    "psutil>=5.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/busyDuckman/pingthing"
+
+[project.scripts]
+pingthing = "pingthing.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [".plans", "ping_thing_redacted.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["B905"]

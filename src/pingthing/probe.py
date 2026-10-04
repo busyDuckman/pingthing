@@ -1,0 +1,257 @@
+# ----------------------------------------------------------------------------------------------------------------------
+# Copyright (c) 2020 Warren Creemers
+# See LICENSE in root folder for further information.
+# ----------------------------------------------------------------------------------------------------------------------
+"""
+Network probes: ping, port scan and MAC lookup.
+
+Everything here is async and non-blocking, so hundreds of probes can be in flight at once on a single thread.
+"""
+
+import asyncio
+import re
+import sys
+import time
+
+import icmplib
+from getmac import get_mac_address
+
+from pingthing.stats import PingFail, PingResult
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Ping
+# ----------------------------------------------------------------------------------------------------------------------
+class Pinger:
+    """
+    Base class, a ping engine that limits how many pings are in flight at once.
+    """
+    name = "none"
+
+    def __init__(self, max_in_flight: int):
+        self._limit = asyncio.Semaphore(max_in_flight)
+
+    async def ping(self, ip: str, time_out: float) -> PingResult:
+        async with self._limit:
+            try:
+                return await self._ping(ip, time_out)
+            except (OSError, icmplib.ICMPLibError):
+                return PingFail.ERROR
+
+    async def _ping(self, ip: str, time_out: float) -> PingResult:
+        raise NotImplementedError
+
+    async def ping_all(self, addresses: list[str], time_out: float) -> dict[str, PingResult]:
+        results = await asyncio.gather(*[self.ping(ip, time_out) for ip in addresses])
+        return dict(zip(addresses, results))
+
+    async def close(self):
+        pass
+
+
+class IcmpPinger(Pinger):
+    """
+    Native ping via icmplib.
+    Unprivileged sockets work on Windows, macOS and most current Linux distros.
+
+    All pings share one socket, and replies are matched by sequence number. A socket per ping is much slower,
+    on Windows every socket gets a copy of every reply, so a /24 sweep meant parsing ~65k packets and the
+    round trip times were inflated by the queueing.
+    """
+    name = "icmp"
+
+    def __init__(self, privileged: bool):
+        super().__init__(max_in_flight=1024)
+        self.privileged = privileged
+        if privileged:
+            self.name = "icmp (raw)"
+        # raises SocketPermissionError if this kind of socket isn't allowed
+        self._sock = icmplib.AsyncSocket(icmplib.ICMPv4Socket(privileged=privileged))
+        self._id = icmplib.utils.unique_identifier()
+        self._sequence = 0
+        self._pending: dict[tuple[int, int], asyncio.Future] = {}
+        self._receiver: asyncio.Task | None = None
+
+    async def _receive(self):
+        while True:
+            try:
+                reply = await self._sock.receive(None, timeout=60)
+            except icmplib.TimeoutExceeded:
+                continue
+            except icmplib.ICMPLibError:
+                await asyncio.sleep(0.1)  # eg: a closed socket, don't spin
+                continue
+            waiting = self._pending.pop((reply.id, reply.sequence), None)
+            if waiting is not None and not waiting.done():
+                waiting.set_result(reply)
+
+    async def _ping(self, ip: str, time_out: float) -> PingResult:
+        if self._receiver is None:
+            self._receiver = asyncio.create_task(self._receive())
+
+        self._sequence = (self._sequence + 1) % 0x10000
+        request = icmplib.ICMPRequest(ip, id=self._id, sequence=self._sequence)
+        self._sock.send(request)
+        # on Linux the kernel picks the id, so read it back after sending
+        key = (request.id, request.sequence)
+        waiting = self._pending[key] = asyncio.get_running_loop().create_future()
+        try:
+            reply = await asyncio.wait_for(waiting, timeout=time_out)
+        except TimeoutError:
+            return PingFail.TIMEOUT
+        finally:
+            self._pending.pop(key, None)
+
+        try:
+            reply.raise_for_status()
+        except icmplib.DestinationUnreachable:
+            return PingFail.UNREACHABLE
+        except icmplib.ICMPError:
+            return PingFail.ERROR
+        return (reply.time - request.time) * 1000
+
+    async def close(self):
+        if self._receiver is not None:
+            self._receiver.cancel()
+        self._sock.close()
+
+
+class SystemPinger(Pinger):
+    """
+    Fallback that runs the OS ping command, for systems where ICMP sockets are not allowed.
+    Process creation is heavier, so fewer run at once.
+    """
+    name = "system ping"
+
+    def __init__(self):
+        super().__init__(max_in_flight=64)
+
+    async def _ping(self, ip: str, time_out: float) -> PingResult:
+        start = time.perf_counter()
+        proc = await asyncio.create_subprocess_exec(
+            *system_ping_command(ip, time_out),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=time_out + 2)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return PingFail.TIMEOUT
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        return parse_system_ping(proc.returncode, out.decode(errors='replace'), elapsed_ms)
+
+
+def system_ping_command(ip: str, time_out: float, platform: str = sys.platform) -> list[str]:
+    if platform == 'win32':
+        return ['ping', '-n', '1', '-w', str(int(time_out * 1000)), ip]
+    if platform == 'darwin':
+        # macOS takes -W in milliseconds
+        return ['ping', '-c', '1', '-W', str(int(time_out * 1000)), ip]
+    # Linux (iputils and busybox) take -W in whole seconds
+    return ['ping', '-c', '1', '-W', str(max(1, round(time_out))), ip]
+
+
+# Matches "time=1.23 ms", "time<1ms", "Zeit=4ms" and so on; the units are the same in every locale.
+_rtt_regex = re.compile(r'[=<]\s*(\d+(?:[.,]\d+)?)\s*ms', flags=re.IGNORECASE)
+# Windows reports a successful reply with a TTL; "Destination host unreachable" has none.
+_ttl_regex = re.compile(r'TTL=\d+', flags=re.IGNORECASE)
+
+
+def parse_system_ping(return_code: int, output: str, elapsed_ms: float, platform: str = sys.platform) -> PingResult:
+    """
+    Turn the output of the ping command into a round trip time.
+    """
+    if return_code != 0:
+        return PingFail.TIMEOUT
+
+    if 'unreachable' in output.lower() or (platform == 'win32' and not _ttl_regex.search(output)):
+        # Windows returns 0 for "Destination host unreachable"
+        return PingFail.UNREACHABLE
+
+    match = _rtt_regex.search(output)
+    if match is None:
+        # Replied, but the output is in a format we don't know; wall time is a fair upper bound.
+        return elapsed_ms
+    return float(match.group(1).replace(',', '.'))
+
+
+async def choose_pinger() -> Pinger:
+    """
+    Pick the best ping engine that works on this machine, without needing root.
+    """
+    for privileged in (False, True):
+        try:
+            pinger = IcmpPinger(privileged)
+        except (icmplib.ICMPLibError, OSError):
+            continue
+        if not isinstance(await pinger.ping('127.0.0.1', 1), PingFail):
+            return pinger
+        await pinger.close()
+    return SystemPinger()
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Port Scan
+# ----------------------------------------------------------------------------------------------------------------------
+tcp_ports_we_care_about = {
+       20: 'FTP-data',     21: 'FTP',          22: 'SSH',          23: 'Telnet',       25: 'SMTP',
+       53: 'DNS',          80: 'HTTP',        110: 'POP3',        119: 'NNTP',        135: 'EPMAP',
+      139: 'NetBIOS',     143: 'IMAP',        177: 'XDMCP',       194: 'IRC',         389: 'LDAP',
+      443: 'HTTPS',       445: 'SMB',         548: 'AFP',         554: 'RTSP',        631: 'IPP',
+     1119: 'BattleNET',  1220: 'QTSS',       1234: 'VLC',        1433: 'MSSQL',      1755: 'MMS',
+     1883: 'MQTT',       1935: 'RTMP',       2375: 'Docker',     2376: 'DockerSSL',  2377: 'DockerSwrm',
+     3306: 'MySQL',      3389: 'RDP',        5000: 'UPnP',       5432: 'Postgres',   5900: 'VNC',
+     5938: 'TeamViewer', 5984: 'CouchDB',    6000: 'X11',        7070: 'RTSP',       8080: 'HTTP-alt',
+     8200: 'GoToMyPC',   8443: 'HTTPS-alt',  9001: 'HSQLDB',     9100: 'Printer',    9150: 'Tor',
+     9418: 'git',       27036: 'Steam-Stream', 32400: 'Plex',  32764: 'Router-Backdoor',
+}
+
+
+async def port_open(ip: str, port: int, time_out: float) -> bool:
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=time_out)
+    except (OSError, TimeoutError):
+        return False
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except OSError:
+        pass
+    return True
+
+
+async def quick_port_scan(ip: str, time_out: float = 2) -> list[int]:
+    """
+    Check the common ports all at once, rather than waiting on 50 timeouts in sequence.
+    """
+    ports = list(tcp_ports_we_care_about.keys())
+    found = await asyncio.gather(*[port_open(ip, p, time_out) for p in ports])
+    return [p for p, is_open in zip(ports, found) if is_open]
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# MAC address and host name
+# ----------------------------------------------------------------------------------------------------------------------
+def _mac_scan(ip: str) -> str | None:
+    try:
+        mac = get_mac_address(ip=ip, network_request=True)
+    except Exception:
+        return None
+    return mac.upper().strip() if mac else None
+
+
+async def mac_scan(ip: str) -> str | None:
+    """
+    MAC address from the OS ARP table; None if unknown (eg: our own address, or a host beyond a router).
+    getmac blocks, so it runs on a worker thread.
+    """
+    return await asyncio.to_thread(_mac_scan, ip)
+
+
+async def host_name(ip: str) -> str | None:
+    loop = asyncio.get_running_loop()
+    try:
+        name, _ = await loop.getnameinfo((ip, 0), 0)
+    except OSError:
+        return None
+    return None if name == ip else name
