@@ -33,7 +33,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument('--no-ports', dest='port_scan', action='store_false', default=True,
                         help="don't scan hosts for common services")
     parser.add_argument('--screen-shot', dest='screen_shot', action='store_true', default=False,
-                        help='hide MAC addresses, for sharing screenshots')
+                        help='hide MAC addresses and host names, for sharing screenshots')
     parser.add_argument('--bw', action='store_true', default=False,
                         help='black/white mode (colour blind safe)')
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
@@ -67,7 +67,7 @@ async def run(args: argparse.Namespace):
     monitor = Monitor(network, pinger, time_out=args.time_out, interval=args.interval, port_scan=args.port_scan,
                       internet=args.internet)
     app = PingThingApp(monitor, args.view, bw=args.bw, gateway=local.gateway, own_address=local.address,
-                       hide_macs=args.screen_shot)
+                       redact=args.screen_shot)
 
     try:
         async with asyncio.TaskGroup() as tg:

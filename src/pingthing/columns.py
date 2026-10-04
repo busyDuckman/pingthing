@@ -158,7 +158,7 @@ class UIContext(NamedTuple):
     gateway: str | None
     own_address: str | None
     now: float
-    hide_macs: bool = False  # for screenshots
+    redact: bool = False  # hide MAC addresses and names, for screenshots
 
 
 def mask_mac(mac: str) -> str:
@@ -166,6 +166,10 @@ def mask_mac(mac: str) -> str:
     Hide the device part of a MAC address, keeping the manufacturer part (the first three octets).
     """
     return mac[:9] + re.sub(r'[0-9A-Fa-f]', '░', mac[9:])
+
+
+def mask_name(name: str) -> str:
+    return '░' * len(name)
 
 
 class ColConfig(NamedTuple):
@@ -239,7 +243,7 @@ def format_name(w: int, host: Host, ctx: UIContext) -> Cell:
         return Cell(fit('...', w), 'pending')
     if host.name is None:
         return Cell(fit('(unknown)', w), 'dim')
-    return Cell(fit(host.name, w))
+    return Cell(fit(mask_name(host.name) if ctx.redact else host.name, w))
 
 
 def services_text(host: Host) -> str:
@@ -263,7 +267,7 @@ def format_mac(w: int, host: Host, ctx: UIContext) -> Cell:
     if not host.mac_done:
         return Cell(fit('scanning', w), 'pending')
     mac = host.mac or 'n/a'
-    return Cell(fit(mask_mac(mac) if ctx.hide_macs and host.mac else mac, w), 'dim')
+    return Cell(fit(mask_mac(mac) if ctx.redact and host.mac else mac, w), 'dim')
 
 
 def manufacturer_text(host: Host) -> str:

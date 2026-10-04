@@ -13,8 +13,9 @@ answer, how steady that is, and what they are.
 I built this because I needed to inspect my own network, and the tools for it were either inadequate or overly
 cumbersome. pingthing needs no configuration: run it, and it finds your network and starts watching.
 
-## Note
-This util does port scanning and network discovery. If you run it on a corporate network, your IT department will probably be unhappy with you.
+> [!WARNING]
+> This util does port scanning and network discovery. If you run it on a corporate network, your IT department will
+> probably be unhappy with you.
 
 ## Features
 - **Live latency per host.** Last, average, best, worst and standard deviation, colour coded, updated every couple of
@@ -55,7 +56,7 @@ It finds your local network by itself, or you can give it one.
 | `--view COLUMNS` | columns to show, from: flag, ip, ping, mean, best, worst, sd, up-time, last-outage, name, services, mac, manufacturer |
 | `--internet ADDRESS` | address to ping as a measure of internet latency, 'off' to skip (default: 1.1.1.1) |
 | `--no-ports` | don't scan hosts for common services |
-| `--screen-shot` | mask MAC addresses, for sharing screenshots |
+| `--screen-shot` | mask MAC addresses and host names, for sharing screenshots |
 | `--bw` | black and white mode (colour blind safe) |
 
 Ping times are in milliseconds. In the first column, G marks your gateway and * marks this machine.

@@ -47,6 +47,7 @@ from pingthing.columns import (
     histogram_rows,
     manufacturer_text,
     mask_mac,
+    mask_name,
     matches,
     ping_kind,
     services_text,
@@ -423,11 +424,13 @@ class HostScreen(ModalScreen):
             return self._coloured(format_ms(value), ping_kind(value))
 
         name = host.name if host.name_done else "..."
+        if self.ctx.redact and host.name:
+            name = mask_name(name)
         mac = host.mac if host.mac_done else "..."
         services = services_text(host) if host.ports is not None else "scanning..."
         self.query_one("#facts", Static).update(
             f"[b]{escape(host.ip)}[/b]{role}  {escape(name or '(unknown name)')}\n"
-            f"mac {escape((mask_mac(mac) if self.ctx.hide_macs and mac else mac) or 'n/a')}  "
+            f"mac {escape((mask_mac(mac) if self.ctx.redact and mac else mac) or 'n/a')}  "
             f"{escape(manufacturer_text(host))}\n"
             f"services {escape(services or 'none found')}\n"
             f"ping {ms(stats.last_ping)}  ave {ms(stats.mean if stats.n else None)}  "
@@ -540,14 +543,14 @@ class PingThingApp(App):
     ]
 
     def __init__(self, monitor: Monitor, view: list[str], bw: bool = False,
-                 gateway: str | None = None, own_address: str | None = None, hide_macs: bool = False):
+                 gateway: str | None = None, own_address: str | None = None, redact: bool = False):
         super().__init__()
         self.monitor = monitor
         self.palette = Palette(bw)
         self.view = view
         self.gateway = gateway
         self.own_address = own_address
-        self.hide_macs = hide_macs
+        self.redact = redact
         self.paused = False
         self.prompt_mode: str | None = None  # "search" or "filter" while the prompt is open
         self.filter_text = ""
@@ -572,7 +575,7 @@ class PingThingApp(App):
 
     # --- drawing ------------------------------------------------------------------------------------------------------
     def _ui_context(self) -> UIContext:
-        return UIContext(self.gateway, self.own_address, time.time(), self.hide_macs)
+        return UIContext(self.gateway, self.own_address, time.time(), self.redact)
 
     def _function_keys(self) -> str:
         parts = []
