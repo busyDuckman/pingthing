@@ -27,16 +27,18 @@ Options in brackets are candidates, not decisions.
 
 ## Phase 2: htop-style interface
 
-- Separate the scanners from the UI: background workers update a data model, the UI just draws it.
-- UI framework (Textual, keep asciimatics, urwid, curses).
+- Move the UI to Textual, replacing asciimatics.
 - Summary header: hosts up/down, gateway and internet latency.
 - Sortable, scrollable table that handles resizing.
-- Detail pane per host with a latency sparkline.
-- Search, pause, help screen, function key bar.
+- Select a row with the keyboard or mouse to open a detail window for that host: latency sparkline, full port
+  scan, traceroute and other common actions.
+- Search (F3) and filter (F4) by IP, name, MAC or manufacturer.
+- Pause, help screen, function key bar.
 - Calmer colour scheme; working black and white theme.
 
 ## Phase 3: Discovery and release
 
+- A workplace mode, as the default scanning can trip corporate network security monitoring.
 - Find hosts that ignore ping, via ARP (OS ARP table, Scapy scan, getmac).
 - Better device names (mDNS, NetBIOS, SSDP).
 - Port scanning opt-in.

@@ -38,3 +38,36 @@ build: require-uv
 # install the pingthing command from this checkout
 install: require-uv
     uv tool install --force --reinstall .
+
+# Open the projects page on GitHub, because it a pain to nav github sometimes.
+[unix]
+github:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    remote=$(git remote get-url origin 2>/dev/null) || { echo "no 'origin' remote here"; exit 1; }
+    # git@host:owner/repo.git, ssh://git@host/owner/repo and https://host/owner/repo.git
+    # all end up as https://host/owner/repo.
+    url=$(sed -E -e 's#^ssh://git@#https://#' -e 's#^git@([^:]+):#https://\1/#' -e 's#\.git$##' <<<"$remote")
+    echo "$url"
+    for opener in xdg-open open; do
+        command -v "$opener" >/dev/null || continue
+        "$opener" "$url" >/dev/null 2>&1 &
+        exit 0
+    done
+    echo "no xdg-open or open on this machine - the address is above"
+
+# Open the projects page on GitHub, because it a pain to nav github sometimes.
+[windows]
+[script("powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[extension(".ps1")]
+github:
+    $ErrorActionPreference = "Stop"
+    $remote = git remote get-url origin 2>$null
+    if (-not $remote) { Write-Host "no 'origin' remote here"; exit 1 }
+    # git@host:owner/repo.git, ssh://git@host/owner/repo and https://host/owner/repo.git
+    # all end up as https://host/owner/repo.
+    $url = $remote -replace '^ssh://git@', 'https://' -replace '^git@([^:]+):', 'https://$1/' -replace '\.git$', ''
+    Write-Host $url
+    Start-Process $url
+
+
