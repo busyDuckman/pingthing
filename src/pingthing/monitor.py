@@ -8,6 +8,7 @@ Keeps the table of hosts up to date. The UI only reads from it.
 
 import asyncio
 import ipaddress
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -27,6 +28,22 @@ MAX_PORT_SCANS = 2
 MAX_MAC_SCANS = 4
 MAX_NAME_LOOKUPS = 8
 
+# A name or MAC lookup that finds nothing is retried after the host next answers a ping. Quickly at first, as
+# the first try often races the host's ARP entry, then backing off so a host that will never have a name settles
+# at one try every 15 minutes.
+RETRY_SOON = (2.0, 5.0, 10.0)
+RETRY_LATER = 30.0  # doubling from here
+RETRY_MAX = 15 * 60.0
+
+
+def retry_delay(attempts: int) -> float:
+    """
+    Seconds to wait before the next try, after this many failed attempts.
+    """
+    if attempts <= len(RETRY_SOON):
+        return RETRY_SOON[attempts - 1]
+    return min(RETRY_MAX, RETRY_LATER * 2 ** (attempts - len(RETRY_SOON) - 1))
+
 
 @dataclass
 class Host:
@@ -38,6 +55,11 @@ class Host:
     mac_done: bool = False
     vendor: MACInfo | None = None
     ports: list[int] | None = None  # None until scanned
+    # when to retry a lookup that found nothing (time.monotonic), never until one has failed
+    name_attempts: int = 0
+    name_retry_at: float = math.inf
+    mac_attempts: int = 0
+    mac_retry_at: float = math.inf
 
     @property
     def sort_key(self):
@@ -101,7 +123,7 @@ class Monitor:
         """
         async with asyncio.TaskGroup() as tg:
             if self.internet is not None:
-                tg.create_task(self._watch(self.internet))
+                tg.create_task(self._watch(self.internet, tg))
             while True:
                 chunk = self.next_to_explore()
                 for ip in chunk:
@@ -116,15 +138,16 @@ class Monitor:
         host = self.add_host(ip)
         if host is None:
             return
-        tg.create_task(self._watch(host))
+        tg.create_task(self._watch(host, tg))
         tg.create_task(self._lookup_name(host))
         tg.create_task(self._lookup_mac(host))
         if self.port_scan:
             tg.create_task(self._scan_ports(host))
 
-    async def _watch(self, host: Host):
+    async def _watch(self, host: Host, tg: asyncio.TaskGroup):
         """
         Ping one host every interval. The discovery ping isn't counted, it's not a fair sample.
+        A reply is also the cue to retry any lookups that found nothing.
 
         Each host gets its own slot in the interval. Slots step by the golden ratio, which keeps them evenly
         spread however many hosts turn up, so a similar number of rows change on each redraw.
@@ -133,19 +156,41 @@ class Monitor:
         while True:
             since_slot = (time.monotonic() - slot) % self.interval
             await asyncio.sleep(self.interval - since_slot)
-            host.stats.add(await self.pinger.ping(host.ip, self.time_out))
+            ping = await self.pinger.ping(host.ip, self.time_out)
+            host.stats.add(ping)
+            if not isinstance(ping, PingFail):
+                self.retry_lookups(host, tg)
+
+    def retry_lookups(self, host: Host, tg: asyncio.TaskGroup):
+        now = time.monotonic()
+        if now >= host.name_retry_at:
+            tg.create_task(self._lookup_name(host))
+        if now >= host.mac_retry_at:
+            tg.create_task(self._lookup_mac(host))
 
     async def _lookup_name(self, host: Host):
+        host.name_retry_at = math.inf  # not while this one runs
         async with self._name_limit:
-            host.name = await probe.host_name(host.ip)
-            host.name_done = True
+            name = await probe.host_name(host.ip)
+        host.name_attempts += 1
+        if name is None:
+            host.name_retry_at = time.monotonic() + retry_delay(host.name_attempts)
+        else:
+            host.name = name
+        host.name_done = True
 
     async def _lookup_mac(self, host: Host):
+        host.mac_retry_at = math.inf  # not while this one runs
         async with self._mac_limit:
-            host.mac = await probe.mac_scan(host.ip)
+            mac = await probe.mac_scan(host.ip)
             # the first lookup loads the vendor list, which takes a moment
-            host.vendor = await asyncio.to_thread(self.vendors.lookup, host.mac) if host.mac else None
-            host.mac_done = True
+            vendor = await asyncio.to_thread(self.vendors.lookup, mac) if mac else None
+        host.mac_attempts += 1
+        if mac is None:
+            host.mac_retry_at = time.monotonic() + retry_delay(host.mac_attempts)
+        else:
+            host.mac, host.vendor = mac, vendor
+        host.mac_done = True
 
     async def _scan_ports(self, host: Host):
         async with self._port_limit:
