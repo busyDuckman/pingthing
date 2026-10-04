@@ -46,13 +46,17 @@ class Host:
 
 class Monitor:
     def __init__(self, network: ipaddress.IPv4Network, pinger: probe.Pinger, time_out: float = 1.0,
-                 interval: float = 2.0, port_scan: bool = True):
+                 interval: float = 2.0, port_scan: bool = True, internet: str | None = None):
+        """
+        :param internet: an address outside the network to ping, as a measure of internet latency
+        """
         self.network = network
         self.pinger = pinger
         self.time_out = time_out
         self.interval = interval
         self.port_scan = port_scan
         self.hosts: dict[str, Host] = {}
+        self.internet = Host(internet) if internet else None
         self.vendors = VendorLookup()
 
         hosts = list(network.hosts()) or [network.network_address]
@@ -96,6 +100,8 @@ class Monitor:
         of pings (and the ARP broadcasts for empty addresses) delays the replies and inflates the times.
         """
         async with asyncio.TaskGroup() as tg:
+            if self.internet is not None:
+                tg.create_task(self._watch(self.internet))
             while True:
                 chunk = self.next_to_explore()
                 for ip in chunk:

@@ -10,8 +10,10 @@ Everything here is async and non-blocking, so hundreds of probes can be in fligh
 
 import asyncio
 import re
+import shutil
 import sys
 import time
+from collections.abc import AsyncIterator, Callable
 
 import icmplib
 from getmac import get_mac_address
@@ -207,6 +209,10 @@ tcp_ports_we_care_about = {
 }
 
 
+def port_name(port: int) -> str:
+    return tcp_ports_we_care_about.get(port, str(port))
+
+
 async def port_open(ip: str, port: int, time_out: float) -> bool:
     try:
         _, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=time_out)
@@ -227,6 +233,72 @@ async def quick_port_scan(ip: str, time_out: float = 2) -> list[int]:
     ports = list(tcp_ports_we_care_about.keys())
     found = await asyncio.gather(*[port_open(ip, p, time_out) for p in ports])
     return [p for p, is_open in zip(ports, found) if is_open]
+
+
+async def full_port_scan(ip: str, time_out: float = 0.5, workers: int = 1024,
+                         progress: Callable[[int, list[int]], None] | None = None) -> list[int]:
+    """
+    Check every TCP port, a pool of workers at a time.
+
+    :param progress: called with (ports checked, open ports so far) as the scan goes
+    """
+    ports = iter(range(1, 0x10000))
+    found = []
+    checked = 0
+
+    async def worker():
+        nonlocal checked
+        for port in ports:
+            if await port_open(ip, port, time_out):
+                found.append(port)
+                found.sort()
+            checked += 1
+            if progress is not None:
+                progress(checked, found)
+
+    async with asyncio.TaskGroup() as tg:
+        for _ in range(workers):
+            tg.create_task(worker())
+    return found
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Traceroute
+# ----------------------------------------------------------------------------------------------------------------------
+def traceroute_command(ip: str, platform: str = sys.platform) -> list[str] | None:
+    """
+    :return: the OS command to trace the route to ip, or None if there isn't one installed
+    """
+    if platform == 'win32':
+        return ['tracert', '-d', '-w', '1000', ip]
+    if shutil.which('traceroute'):
+        return ['traceroute', '-n', '-w', '1', ip]
+    if shutil.which('tracepath'):
+        # many Linux distros ship tracepath but not traceroute
+        return ['tracepath', '-n', ip]
+    return None
+
+
+async def traceroute(ip: str) -> AsyncIterator[str]:
+    """
+    Run the system traceroute, yielding its output a line at a time.
+    """
+    command = traceroute_command(ip)
+    if command is None:
+        yield "traceroute is not installed"
+        return
+    proc = await asyncio.create_subprocess_exec(
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    try:
+        async for line in proc.stdout:
+            line = line.decode(errors='replace').rstrip()
+            if line:
+                yield line
+        await proc.wait()
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
 
 
 # ----------------------------------------------------------------------------------------------------------------------

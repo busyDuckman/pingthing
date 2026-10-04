@@ -14,7 +14,7 @@ requires-python = ">=3.11"
 keywords = ["network", "ping", "lan", "monitor", "tui"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Environment :: Console :: Curses",
+    "Environment :: Console",
     "Intended Audience :: System Administrators",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: MacOS",
@@ -23,10 +23,10 @@ classifiers = [
     "Topic :: System :: Networking :: Monitoring",
 ]
 dependencies = [
-    "asciimatics>=1.15",
     "getmac>=0.9.5",
     "icmplib>=3.0.4",
     "psutil>=5.9",
+    "textual>=8.0",
 ]
 
 [project.urls]
@@ -36,13 +36,15 @@ Homepage = "https://github.com/busyDuckman/pingthing"
 pingthing = "pingthing.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [".plans", "ping_thing_redacted.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 120

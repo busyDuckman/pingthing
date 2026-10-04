@@ -30,7 +30,7 @@ Options in brackets are candidates, not decisions.
 - Move the UI to Textual, replacing asciimatics.
 - Summary header: hosts up/down, gateway and internet latency.
 - Sortable, scrollable table that handles resizing.
-- Select a row with the keyboard or mouse to open a detail window for that host: latency sparkline, full port
+- Select a row with the keyboard or mouse to open a detail window for that host: latency sparkline, histogram, full port
   scan, traceroute and other common actions.
 - Search (F3) and filter (F4) by IP, name, MAC or manufacturer.
 - Pause, help screen, function key bar.

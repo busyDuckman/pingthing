@@ -6,8 +6,10 @@
 Running ping statistics per host.
 """
 
+import bisect
 import math
 import time
+from collections import deque
 from enum import Enum
 
 
@@ -22,6 +24,12 @@ class PingFail(Enum):
 
 # A ping result is either a round trip time in milliseconds, or the reason it failed.
 PingResult = float | PingFail
+
+# Recent pings kept for the latency graph
+HISTORY_SIZE = 300
+
+# Histogram bucket edges in ms, buckets are: <1, 1-2, 2-5 ... 200-500, 500+
+HISTOGRAM_EDGES = (1, 2, 5, 10, 20, 50, 100, 200, 500)
 
 
 class PingStats:
@@ -40,6 +48,8 @@ class PingStats:
         self.last_fail: float | None = None
         self.last_ok: float | None = None
         self.last_ping: PingResult | None = None
+        self.history: deque[PingResult] = deque(maxlen=HISTORY_SIZE)
+        self.histogram: list[int] = [0] * (len(HISTOGRAM_EDGES) + 1)
 
     def __str__(self):
         return f"m(S)={self.mean:.1f} ({self.sd_sample():.1f}) b={self.min} w={self.max}"
@@ -69,6 +79,7 @@ class PingStats:
         """
         now = time.time() if now is None else now
         self.last_ping = ping
+        self.history.append(ping)
         if isinstance(ping, PingFail):
             self.fails += 1
             self.last_fail = now
@@ -81,6 +92,7 @@ class PingStats:
         m_prev = self.mean
         self.mean += (value - self.mean) / self.n
         self.variance += (value - self.mean) * (value - m_prev)
+        self.histogram[bisect.bisect_right(HISTOGRAM_EDGES, value)] += 1
 
         if self.n == 1:
             self.min = self.max = value
