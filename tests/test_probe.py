@@ -97,3 +97,38 @@ async def test_quick_scan_that_learns_nothing_returns_none(monkeypatch):
         return probe.PortState.UNKNOWN
     monkeypatch.setattr(probe, "check_port", check_port)
     assert await probe.quick_port_scan("10.0.0.5") is None
+
+
+def test_never_sends_web_requests_to_printer_ports():
+    assert not probe.worth_checking_for_web(9100)
+    assert not probe.worth_checking_for_web(9103)
+    assert not probe.worth_checking_for_web(22)  # known, and not web
+    assert probe.worth_checking_for_web(8080)
+    assert probe.worth_checking_for_web(12345)  # unknown, worth asking
+
+
+def test_parse_http_response():
+    page = b"HTTP/1.1 200 OK\r\nServer: x\r\n\r\n<html><head><TITLE>\n  Router &amp; Admin </TITLE>"
+    assert probe.parse_http_response(page) == ("200 OK", "Router & Admin")
+    assert probe.parse_http_response(b"HTTP/1.0 302 Found\r\n\r\n") == ("302 Found", None)
+    assert probe.parse_http_response(b"SSH-2.0-OpenSSH_9.6\r\n") is None
+
+
+async def test_finds_a_plain_http_page():
+    async def serve(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<title>Test page</title>")
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    async with server:
+        pages = await probe.find_web_pages("127.0.0.1", [port], time_out=2)
+    assert pages == [probe.WebPage(port, f"http://127.0.0.1:{port}", "200 OK", "Test page")]
+
+
+async def test_in_daemon_thread_returns_results_and_raises_errors():
+    assert await probe.in_daemon_thread(sum, [1, 2, 3]) == 6
+    with pytest.raises(ValueError):
+        await probe.in_daemon_thread(int, "not a number")

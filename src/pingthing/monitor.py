@@ -64,6 +64,7 @@ class Host:
     vendor: MACInfo | None = None
     ports: list[int] | None = None  # None until scanned
     full_scanned: bool = False  # all ports checked, from the host window
+    web_pages: list[probe.WebPage] = field(default_factory=list)
     # when to retry a lookup that found nothing (time.monotonic), never until one has failed
     name_attempts: int = 0
     name_retry_at: float = math.inf
@@ -217,7 +218,7 @@ class Monitor:
         async with self._mac_limit:
             mac = await probe.mac_scan(host.ip)
             # the first lookup loads the vendor list, which takes a moment
-            vendor = await asyncio.to_thread(self.vendors.lookup, mac) if mac else None
+            vendor = await probe.in_daemon_thread(self.vendors.lookup, mac) if mac else None
         host.mac_attempts += 1
         if mac is None:
             host.mac_retry_at = time.monotonic() + retry_delay(host.mac_attempts)
@@ -238,3 +239,5 @@ class Monitor:
             # the quick scan only checks common ports, keep any others a full scan found
             others = [p for p in host.ports or [] if p not in probe.tcp_ports_we_care_about]
             host.ports = sorted(ports + others)
+            async with self._port_limit:
+                host.web_pages = await probe.find_web_pages(host.ip, host.ports)

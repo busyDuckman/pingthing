@@ -125,7 +125,7 @@ HELP = """\
 [b]In the host window[/b]
   Left/Right  switch between graphs, port scan and traceroute
   g  graphs               p  full port scan       t  traceroute
-  c  copy the address     w  open its web page
+  c  copy the address     w  its web pages
 """
 
 
@@ -326,6 +326,33 @@ class HelpScreen(ModalScreen):
             yield Static(HELP)
 
 
+class WebPagesScreen(ModalScreen[str]):
+    """
+    Pick one of a host's web pages to open.
+    """
+    BINDINGS = [Binding("escape,q", "dismiss", "Close")]
+    DEFAULT_CSS = """
+    WebPagesScreen { align: center middle; }
+    WebPagesScreen > OptionList { width: 80; max-width: 100%; height: auto; max-height: 80%; border: round $primary; }
+    """
+
+    def __init__(self, pages: list[probe.WebPage]):
+        super().__init__()
+        self.pages = pages
+
+    def compose(self) -> ComposeResult:
+        options = OptionList(*[
+            f"{escape(page.url):<28} {escape(page.title or '(no title)')}  [dim]{escape(page.status)}[/dim]"
+            for page in self.pages
+        ])
+        options.border_title = "Web pages"
+        yield options
+
+    @on(OptionList.OptionSelected)
+    def chosen(self, event: OptionList.OptionSelected):
+        self.dismiss(self.pages[event.option_index].url)
+
+
 class SortScreen(ModalScreen[str]):
     """
     Pick a column to sort by.
@@ -365,7 +392,7 @@ class HostScreen(ModalScreen):
         Binding("p", "port_scan", "Full port scan"),
         Binding("t", "traceroute", "Traceroute"),
         Binding("c", "copy", "Copy address"),
-        Binding("w", "open_web", "Open web page"),
+        Binding("w", "open_web", "Web pages"),
     ]
     DEFAULT_CSS = """
     HostScreen { align: center middle; }
@@ -383,11 +410,10 @@ class HostScreen(ModalScreen):
     #port_scan ProgressBar { margin-top: 1; }
     """
 
-    WEB_PORTS = [(443, "https"), (8443, "https"), (80, "http"), (8080, "http")]
     PANES = ("graphs", "port_scan", "traceroute")
     GRAPH_OVERHEAD = 4 + 3  # the two section labels, and the smallest useful graph
     HINTS = [("graphs", "g graphs"), ("port_scan", "p port scan"), ("traceroute", "t traceroute"),
-             ("copy", "c copy"), ("open_web", "w web"), ("close", "esc close")]
+             ("copy", "c copy"), ("open_web", "w web pages"), ("close", "esc close")]
 
     def __init__(self, host: Host, monitor: Monitor, ctx: UIContext, palette: Palette):
         super().__init__()
@@ -517,13 +543,18 @@ class HostScreen(ModalScreen):
 
         found_before = set(self.host.ports or [])
         found = await probe.full_port_scan(self.host.ip, progress=progress)
+        log.write_line(f"Found {len(found)} open port{'' if len(found) == 1 else 's'}, checking them for web pages...")
+        pages = {page.port: page for page in await probe.find_web_pages(self.host.ip, found)}
         for port in found:
             # we can only say a port is new if an earlier scan checked it: the quick scan only checks common ports
             checked_before = self.host.full_scanned or port in probe.tcp_ports_we_care_about
             new = "  (newly discovered)" if checked_before and port not in found_before else ""
-            log.write_line(f"{port:>5}  {probe.tcp_ports_we_care_about.get(port, '?')}{new}")
-        log.write_line(f"{len(found)} open port{'' if len(found) == 1 else 's'}")
+            page = pages.get(port)
+            web = f"  *web page: {page.title or page.url}" if page else ""
+            log.write_line(f"{port:>5}  {probe.tcp_ports_we_care_about.get(port, '?')}{new}{web}")
+        log.write_line(f"{len(found)} open port{'' if len(found) == 1 else 's'}, {len(pages)} with web pages")
         self.host.ports = found
+        self.host.web_pages = list(pages.values())
         self.host.full_scanned = True
 
     def action_traceroute(self):
@@ -541,14 +572,15 @@ class HostScreen(ModalScreen):
         self.notify(f"Copied {self.host.ip}")
 
     def action_open_web(self):
-        for port, scheme in self.WEB_PORTS:
-            if port in (self.host.ports or []):
-                default = {"http": 80, "https": 443}[scheme]
-                url = f"{scheme}://{self.host.ip}" + ("" if port == default else f":{port}")
+        if not self.host.web_pages:
+            self.notify("No web pages found on this host, a full port scan (p) may find more", severity="warning")
+            return
+
+        def chosen(url: str | None):
+            if url is not None:
                 self.app.open_url(url)
                 self.notify(f"Opening {url}")
-                return
-        self.notify("No web server found on this host", severity="warning")
+        self.app.push_screen(WebPagesScreen(self.host.web_pages), chosen)
 
 
 # ----------------------------------------------------------------------------------------------------------------------

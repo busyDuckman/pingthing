@@ -9,12 +9,17 @@ Everything here is async and non-blocking, so hundreds of probes can be in fligh
 """
 
 import asyncio
+import html
 import re
 import shutil
+import socket
+import ssl
 import sys
+import threading
 import time
 from collections.abc import AsyncIterator, Callable
 from enum import Enum
+from typing import NamedTuple
 
 import icmplib
 from getmac import get_mac_address
@@ -280,6 +285,92 @@ async def full_port_scan(ip: str, time_out: float = 0.5, workers: int = 1024,
 
 
 # ----------------------------------------------------------------------------------------------------------------------
+# Web pages
+# ----------------------------------------------------------------------------------------------------------------------
+# Common ports that serve web pages. Other common ports are known not to, so aren't asked.
+WEB_PORTS = {80, 443, 631, 5000, 8080, 8443, 32400}
+
+# Never send anything to these: raw printer ports print whatever arrives, so a web request is a page of garbage.
+NEVER_PROBE = {515, *range(9100, 9110)}
+
+
+class WebPage(NamedTuple):
+    port: int
+    url: str
+    status: str  # eg: "200 OK"
+    title: str | None
+
+
+def worth_checking_for_web(port: int) -> bool:
+    if port in NEVER_PROBE:
+        return False
+    return port in WEB_PORTS or port not in tcp_ports_we_care_about
+
+
+_title_regex = re.compile(rb'<title[^>]*>(.*?)</title>', flags=re.IGNORECASE | re.DOTALL)
+
+
+def parse_http_response(data: bytes) -> tuple[str, str | None] | None:
+    """
+    :return: (status, page title) from the start of an HTTP response, or None if it isn't one
+    """
+    if not data.startswith(b"HTTP/"):
+        return None
+    status = data.split(b"\r\n", 1)[0].decode(errors='replace').split(" ", 1)[1:]
+    title = _title_regex.search(data)
+    if title is not None:
+        title = " ".join(html.unescape(title.group(1).decode(errors='replace')).split())[:80] or None
+    return (status[0].strip() if status else "?"), title
+
+
+async def _http_get(ip: str, port: int, scheme: str, time_out: float) -> WebPage | None:
+    context = None
+    if scheme == "https":
+        # devices on a LAN nearly all use self signed certificates, we only want to know a page is there
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    data = b""
+    try:
+        async with asyncio.timeout(time_out):
+            reader, writer = await asyncio.open_connection(ip, port, ssl=context)
+            try:
+                writer.write(f"GET / HTTP/1.1\r\nHost: {ip}\r\nUser-Agent: pingthing\r\n"
+                             f"Connection: close\r\n\r\n".encode())
+                await writer.drain()
+                while len(data) < 16384 and (chunk := await reader.read(4096)):
+                    data += chunk
+            finally:
+                writer.close()
+    except (OSError, TimeoutError, ssl.SSLError):
+        pass  # a partial response is still enough to recognise
+    response = parse_http_response(data)
+    if response is None:
+        return None
+    default_port = {"http": 80, "https": 443}[scheme]
+    url = f"{scheme}://{ip}" + ("" if port == default_port else f":{port}")
+    return WebPage(port, url, *response)
+
+
+async def web_page(ip: str, port: int, time_out: float = 3) -> WebPage | None:
+    """
+    The web page on an open port, if there is one.
+    HTTPS is tried first, many HTTPS servers answer a plain request with an HTTP error, which would look like a page.
+    """
+    for scheme in ("https", "http"):
+        page = await _http_get(ip, port, scheme, time_out)
+        if page is not None:
+            return page
+    return None
+
+
+async def find_web_pages(ip: str, ports: list[int], time_out: float = 3) -> list[WebPage]:
+    candidates = [p for p in ports if worth_checking_for_web(p)]
+    pages = await asyncio.gather(*[web_page(ip, p, time_out) for p in candidates])
+    return [page for page in pages if page is not None]
+
+
+# ----------------------------------------------------------------------------------------------------------------------
 # Traceroute
 # ----------------------------------------------------------------------------------------------------------------------
 def traceroute_command(ip: str, platform: str = sys.platform) -> list[str] | None:
@@ -321,6 +412,38 @@ async def traceroute(ip: str) -> AsyncIterator[str]:
 # ----------------------------------------------------------------------------------------------------------------------
 # MAC address and host name
 # ----------------------------------------------------------------------------------------------------------------------
+async def in_daemon_thread(func: Callable, *args):
+    """
+    Like asyncio.to_thread, but the thread doesn't hold up exit.
+
+    Lookups like reverse DNS block for seconds and can't be cancelled. asyncio.run waits for its worker threads
+    before returning, so quitting would wait on lookups nobody needs any more.
+    """
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def settle(result, error):
+        if future.done():
+            return  # cancelled while we were busy
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(result)
+
+    def run():
+        try:
+            outcome = (func(*args), None)
+        except Exception as e:
+            outcome = (None, e)
+        try:
+            loop.call_soon_threadsafe(settle, *outcome)
+        except RuntimeError:
+            pass  # the loop has closed, we're exiting
+
+    threading.Thread(target=run, name=f"pingthing-{func.__name__}", daemon=True).start()
+    return await future
+
+
 def _mac_scan(ip: str) -> str | None:
     try:
         mac = get_mac_address(ip=ip, network_request=True)
@@ -334,13 +457,12 @@ async def mac_scan(ip: str) -> str | None:
     MAC address from the OS ARP table; None if unknown (eg: our own address, or a host beyond a router).
     getmac blocks, so it runs on a worker thread.
     """
-    return await asyncio.to_thread(_mac_scan, ip)
+    return await in_daemon_thread(_mac_scan, ip)
 
 
 async def host_name(ip: str) -> str | None:
-    loop = asyncio.get_running_loop()
     try:
-        name, _ = await loop.getnameinfo((ip, 0), 0)
+        name, _ = await in_daemon_thread(socket.getnameinfo, (ip, 0), 0)
     except OSError:
         return None
     return None if name == ip else name

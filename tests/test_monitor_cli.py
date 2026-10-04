@@ -11,6 +11,13 @@ from pingthing.monitor import EXPLORE_CHUNK, FIRST_EXPLORE_CHUNK, Monitor, port_
 from pingthing.probe import Pinger
 
 
+@pytest.fixture(autouse=True)
+def no_web_requests(monkeypatch):
+    async def find_web_pages(ip, ports):
+        return []
+    monkeypatch.setattr(probe, "find_web_pages", find_web_pages)
+
+
 def make_monitor(net="10.0.0.0/24"):
     return Monitor(ipaddress.IPv4Network(net), Pinger(1))
 

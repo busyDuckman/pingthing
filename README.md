@@ -77,7 +77,7 @@ Ping times are in milliseconds. In the first column, G marks your gateway and * 
 | F10 or q | quit |
 
 In the host window: Left and Right (or g, p, t) switch between the latency graphs, a full port scan and traceroute;
-c copies the address and w opens its web page.
+c copies the address and w lists the web pages it serves (on any port) to open.
 
 ## How it works
 
