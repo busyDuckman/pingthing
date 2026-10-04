@@ -36,13 +36,15 @@ It finds your local network by itself, or you can give it one.
 
       --range RANGE         network range, eg: 192.168.0.0/24 (default: detect the local network)
       --time_out SECONDS    time out for ping (default: 1)
-      --interval SECONDS    seconds between ping sweeps (default: 2)
+      --interval SECONDS    seconds between pings to each host (default: 2)
       --view COLUMNS        columns to show, defaults to:
                             flag,ip,ping,mean,best,worst,sd,up-time,last-outage,name,services,mac,manufacturer
       --no-ports            don't scan hosts for common services
       --bw                  black/white mode (colour blind safe)
 
 Ping times are in milliseconds. In the first column, G marks your gateway and * marks this machine.
+
+Ping times are accurate to about 1ms as they are measured in Python rather than by the OS. 
 
 #### Development
 Uses [uv](https://docs.astral.sh/uv/) and [just](https://github.com/casey/just).

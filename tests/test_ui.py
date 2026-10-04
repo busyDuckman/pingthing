@@ -78,7 +78,8 @@ class FakeScreen:
 
 def test_draw_fills_the_screen():
     monitor = Monitor(ipaddress.IPv4Network("10.0.0.0/24"), Pinger(1))
-    monitor.update({"10.0.0.20": 1.0, "10.0.0.3": 2.0, "10.0.0.100": 3.0})
+    for ip in ["10.0.0.20", "10.0.0.3", "10.0.0.100"]:
+        monitor.add_host(ip)
     screen = FakeScreen()
     UI(monitor, DEFAULT_VIEW, gateway="10.0.0.3").draw(screen)
     assert all(len(line) == screen.width for line in screen.lines.values())

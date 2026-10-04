@@ -5,24 +5,16 @@ import pytest
 from pingthing.cli import parse_args
 from pingthing.monitor import EXPLORE_CHUNK, FIRST_EXPLORE_CHUNK, Monitor
 from pingthing.probe import Pinger
-from pingthing.stats import PingFail
 
 
 def make_monitor(net="10.0.0.0/24"):
     return Monitor(ipaddress.IPv4Network(net), Pinger(1))
 
 
-def test_new_hosts_are_added_and_known_hosts_record_failures():
+def test_add_host_only_once():
     m = make_monitor()
-    new = m.update({"10.0.0.1": 3.0, "10.0.0.2": PingFail.TIMEOUT})
-    assert [h.ip for h in new] == ["10.0.0.1"]
-    assert "10.0.0.2" not in m.hosts
-    assert m.hosts["10.0.0.1"].stats.n == 0  # discovery ping isn't a fair sample
-
-    m.update({"10.0.0.1": PingFail.TIMEOUT})
-    m.update({"10.0.0.1": 4.0})
-    stats = m.hosts["10.0.0.1"].stats
-    assert (stats.n, stats.fails, stats.mean) == (1, 1, 4.0)
+    assert m.add_host("10.0.0.1").ip == "10.0.0.1"
+    assert m.add_host("10.0.0.1") is None
 
 
 def test_exploration_covers_network_then_slows_down():
@@ -35,7 +27,7 @@ def test_exploration_covers_network_then_slows_down():
 
 def test_exploration_skips_known_hosts():
     m = make_monitor("10.0.0.0/28")
-    m.update({"10.0.0.1": 1.0})
+    m.add_host("10.0.0.1")
     assert "10.0.0.1" not in m.next_to_explore()
 
 

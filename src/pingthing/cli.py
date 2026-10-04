@@ -24,7 +24,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument('--time_out', type=float, required=False, default=1.0,
                         help='time out for ping, in seconds (default: 1)')
     parser.add_argument('--interval', type=float, required=False, default=2.0,
-                        help='seconds between ping sweeps (default: 2)')
+                        help='seconds between pings to each host (default: 2)')
     parser.add_argument('--view', type=str, required=False, default=",".join(DEFAULT_VIEW),
                         help=f'columns to show (default: {",".join(DEFAULT_VIEW)})')
     parser.add_argument('--no-ports', dest='port_scan', action='store_false', default=True,

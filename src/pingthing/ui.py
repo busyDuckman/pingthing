@@ -303,7 +303,7 @@ class UI:
                 self._print(screen, Cell(fit(txt, screen.width)), 0, y)
 
         # show info bar at bottom
-        info = (f" ping unit=ms  hosts={len(hosts)}  sweeps={m.sweeps}  network={m.network}"
+        info = (f" ping unit=ms  hosts={len(hosts)}  network={m.network}"
                 f"  gateway={self.gateway or '?'}  ping engine={m.pinger.name}  time_out={m.time_out}s")
         self._print(screen, Cell(fit(info, screen.width), COLOUR_WHITE, COLOUR_BLUE), 0, screen.height - 1)
         screen.refresh()

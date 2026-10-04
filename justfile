@@ -28,7 +28,7 @@ lint: require-uv
     uv run ruff check src tests scripts
 
 # refresh the bundled manufacturer list from the IEEE
-update-oui: require-uv
+update-mac-list: require-uv
     uv run python scripts/update_oui.py
 
 # build the wheel and sdist into dist/

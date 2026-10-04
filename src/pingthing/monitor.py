@@ -15,9 +15,12 @@ from pingthing import probe
 from pingthing.stats import PingFail, PingStats
 from pingthing.vendors import MACInfo, VendorLookup
 
-# How many not yet seen addresses to try each sweep, so a /24 is re-explored about every 16 seconds.
+# How many not yet seen addresses to try each interval, so a /24 is re-explored about every 16 seconds.
+# The first pass covers everything quickly.
 FIRST_EXPLORE_CHUNK = 256
 EXPLORE_CHUNK = 32
+
+GOLDEN_RATIO = 0.6180339887
 
 # Limits on slower background lookups
 MAX_PORT_SCANS = 2
@@ -50,7 +53,6 @@ class Monitor:
         self.interval = interval
         self.port_scan = port_scan
         self.hosts: dict[str, Host] = {}
-        self.sweeps = 0
         self.vendors = VendorLookup()
 
         hosts = list(network.hosts()) or [network.network_address]
@@ -76,38 +78,56 @@ class Monitor:
             self._first_pass = False
         return [ip for ip in chunk if ip not in self.hosts]
 
-    def update(self, results: dict[str, probe.PingResult], now: float | None = None) -> list[Host]:
+    def add_host(self, ip: str) -> Host | None:
         """
-        Record a sweep. Known hosts that didn't answer count as a failure.
-        A new host's first reply isn't counted, it was timed during exploration so it's not a fair sample.
-        :return: newly found hosts
+        :return: the new host, or None if we already knew it
         """
-        new_hosts = []
-        for ip, ping in results.items():
-            if ip in self.hosts:
-                self.hosts[ip].stats.add(ping, now)
-            elif not isinstance(ping, PingFail):
-                host = self.hosts[ip] = Host(ip)
-                new_hosts.append(host)
-        self.sweeps += 1
-        return new_hosts
+        if ip in self.hosts:
+            return None
+        host = self.hosts[ip] = Host(ip)
+        return host
 
     async def run(self):
+        """
+        Explore the network a chunk at a time, and keep pinging every host found.
+
+        Pings are spread out rather than sent in bursts. Each host is pinged on its own timer, so the table
+        updates a few rows at a time instead of all at once. It's kinder to the network too, on wifi a burst
+        of pings (and the ARP broadcasts for empty addresses) delays the replies and inflates the times.
+        """
         async with asyncio.TaskGroup() as tg:
             while True:
-                started = time.monotonic()
+                chunk = self.next_to_explore()
+                for ip in chunk:
+                    tg.create_task(self._explore(ip, tg))
+                    await asyncio.sleep(self.interval / len(chunk))
+                if not chunk:
+                    await asyncio.sleep(self.interval)
 
-                # Time known hosts first. Exploring sends a burst of pings to empty addresses, and the ARP
-                # broadcasts for them (slow on wifi) would delay the replies and inflate the times.
-                results = await self.pinger.ping_all(list(self.hosts.keys()), self.time_out)
-                results |= await self.pinger.ping_all(self.next_to_explore(), self.time_out)
+    async def _explore(self, ip: str, tg: asyncio.TaskGroup):
+        if isinstance(await self.pinger.ping(ip, self.time_out), PingFail):
+            return
+        host = self.add_host(ip)
+        if host is None:
+            return
+        tg.create_task(self._watch(host))
+        tg.create_task(self._lookup_name(host))
+        tg.create_task(self._lookup_mac(host))
+        if self.port_scan:
+            tg.create_task(self._scan_ports(host))
 
-                for host in self.update(results):
-                    tg.create_task(self._lookup_name(host))
-                    tg.create_task(self._lookup_mac(host))
-                    if self.port_scan:
-                        tg.create_task(self._scan_ports(host))
-                await asyncio.sleep(max(0.0, self.interval - (time.monotonic() - started)))
+    async def _watch(self, host: Host):
+        """
+        Ping one host every interval. The discovery ping isn't counted, it's not a fair sample.
+
+        Each host gets its own slot in the interval. Slots step by the golden ratio, which keeps them evenly
+        spread however many hosts turn up, so a similar number of rows change on each redraw.
+        """
+        slot = ((len(self.hosts) * GOLDEN_RATIO) % 1.0) * self.interval
+        while True:
+            since_slot = (time.monotonic() - slot) % self.interval
+            await asyncio.sleep(self.interval - since_slot)
+            host.stats.add(await self.pinger.ping(host.ip, self.time_out))
 
     async def _lookup_name(self, host: Host):
         async with self._name_limit:

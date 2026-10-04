@@ -3,7 +3,7 @@
 # See LICENSE in root folder for further information.
 # ----------------------------------------------------------------------------------------------------------------------
 """
-Work out which network we are on, so it doesn't need to be typed in.
+Work out which network we are on.
 """
 
 import ipaddress
