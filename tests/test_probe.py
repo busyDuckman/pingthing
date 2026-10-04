@@ -81,3 +81,19 @@ def test_port_scan_finds_a_listening_port():
 
     port, is_open = asyncio.run(run())
     assert is_open, port
+
+
+async def test_a_refused_port_is_closed_not_unknown():
+    server = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    server.close()
+    await server.wait_closed()
+    # Windows retries a refused connection for a couple of seconds before giving up
+    assert await probe.check_port("127.0.0.1", port, 5) is probe.PortState.CLOSED
+
+
+async def test_quick_scan_that_learns_nothing_returns_none(monkeypatch):
+    async def check_port(ip, port, time_out):
+        return probe.PortState.UNKNOWN
+    monkeypatch.setattr(probe, "check_port", check_port)
+    assert await probe.quick_port_scan("10.0.0.5") is None

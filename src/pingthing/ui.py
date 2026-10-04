@@ -94,7 +94,8 @@ FUNCTION_KEYS = [
     ("F1", "Help", "help"),
     ("F3", "Search", "search"),
     ("F4", "Filter", "filter"),
-    ("F5", "Pause", "pause"),
+    ("F5", "Rescan", "rescan"),
+    ("F7", "Pause", "pause"),
     ("F6", "SortBy", "sort"),
     ("F10", "Quit", "quit"),
 ]
@@ -108,7 +109,8 @@ HELP = """\
   F1  ?                          this help
   F3  /                          search, press F3 again for the next match
   F4  \\\\                          filter the table
-  F5  space                      pause the display (pinging carries on)
+  F5                             rescan: names, MAC addresses, ports and new hosts
+  F7  space                      pause the display (pinging carries on)
   F6  >                          sort by a column, or click a column heading
   Esc                            close a window or clear the filter, otherwise quit
   F10 q                          quit
@@ -565,7 +567,8 @@ class PingThingApp(App):
         Binding("f1,question_mark", "help", "Help"),
         Binding("f3,slash", "search", "Search"),
         Binding("f4,backslash", "filter", "Filter"),
-        Binding("f5,space", "pause", "Pause"),
+        Binding("f5", "rescan", "Rescan"),
+        Binding("f7,space", "pause", "Pause"),
         Binding("f6,greater_than_sign", "sort", "Sort"),
         Binding("f10,q", "quit", "Quit"),
         Binding("escape", "escape", show=False),
@@ -728,6 +731,10 @@ class PingThingApp(App):
     # --- other keys ---------------------------------------------------------------------------------------------------
     def action_help(self):
         self.push_screen(HelpScreen())
+
+    def action_rescan(self):
+        if self.monitor.rescan():
+            self.notify(f"Rescanning {len(self.monitor.hosts)} hosts and the network")
 
     def action_pause(self):
         self.paused = not self.paused

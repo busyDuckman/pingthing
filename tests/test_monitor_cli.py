@@ -7,7 +7,7 @@ import pytest
 
 from pingthing import probe
 from pingthing.cli import parse_args
-from pingthing.monitor import EXPLORE_CHUNK, FIRST_EXPLORE_CHUNK, Monitor, retry_delay
+from pingthing.monitor import EXPLORE_CHUNK, FIRST_EXPLORE_CHUNK, Monitor, port_retry_delay, retry_delay
 from pingthing.probe import Pinger
 
 
@@ -61,6 +61,43 @@ async def test_failed_lookup_is_retried_after_a_later_ping(monkeypatch):
     async with asyncio.TaskGroup() as tg:
         m.retry_lookups(host, tg)
     assert host.name == "printer" and host.name_retry_at == math.inf
+
+
+async def test_inconclusive_port_scan_is_retried_and_keeps_earlier_results(monkeypatch):
+    scans = iter([[22, 80], None])
+
+    async def quick_port_scan(ip):
+        return next(scans)
+    monkeypatch.setattr(probe, "quick_port_scan", quick_port_scan)
+
+    m = make_monitor()
+    host = m.add_host("10.0.0.5")
+    await m._scan_ports(host)
+    assert host.ports == [22, 80] and host.ports_retry_at == math.inf
+    await m._scan_ports(host)
+    assert host.ports == [22, 80]
+    assert host.ports_retry_at - time.monotonic() == pytest.approx(20, abs=1)  # second attempt
+    assert [port_retry_delay(n) for n in (1, 2, 3)] == [10, 20, 40] and port_retry_delay(50) == 15 * 60
+
+
+async def test_rescan_looks_everything_up_again(monkeypatch):
+    looked_up = []
+
+    async def lookup(ip, *args):
+        looked_up.append(ip)
+    monkeypatch.setattr(probe, "host_name", lookup)
+    monkeypatch.setattr(probe, "mac_scan", lookup)
+    monkeypatch.setattr(probe, "quick_port_scan", lookup)
+
+    m = make_monitor()
+    m.add_host("10.0.0.5")
+    assert not m.rescan()  # not running yet
+    async with asyncio.TaskGroup() as tg:
+        m._tasks = tg
+        m.next_to_explore()
+        assert m.rescan()
+    assert looked_up == ["10.0.0.5"] * 3
+    assert m._first_pass and m._explore_pos == 0
 
 
 def test_args():

@@ -14,6 +14,7 @@ import shutil
 import sys
 import time
 from collections.abc import AsyncIterator, Callable
+from enum import Enum
 
 import icmplib
 from getmac import get_mac_address
@@ -213,26 +214,42 @@ def port_name(port: int) -> str:
     return tcp_ports_we_care_about.get(port, str(port))
 
 
-async def port_open(ip: str, port: int, time_out: float) -> bool:
+class PortState(Enum):
+    OPEN = "open"
+    CLOSED = "closed"    # the host refused the connection, so we know
+    UNKNOWN = "unknown"  # timed out or errored: a firewall dropping it, the host asleep, or a problem our end
+
+
+async def check_port(ip: str, port: int, time_out: float) -> PortState:
     try:
         _, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=time_out)
+    except ConnectionRefusedError:
+        return PortState.CLOSED
     except (OSError, TimeoutError):
-        return False
+        return PortState.UNKNOWN
     writer.close()
     try:
         await writer.wait_closed()
     except OSError:
         pass
-    return True
+    return PortState.OPEN
 
 
-async def quick_port_scan(ip: str, time_out: float = 2) -> list[int]:
+async def port_open(ip: str, port: int, time_out: float) -> bool:
+    return await check_port(ip, port, time_out) is PortState.OPEN
+
+
+async def quick_port_scan(ip: str, time_out: float = 2) -> list[int] | None:
     """
     Check the common ports all at once, rather than waiting on 50 timeouts in sequence.
+
+    :return: the open ports, or None if the scan learned nothing (no port was open, and none were refused)
     """
     ports = list(tcp_ports_we_care_about.keys())
-    found = await asyncio.gather(*[port_open(ip, p, time_out) for p in ports])
-    return [p for p, is_open in zip(ports, found) if is_open]
+    states = await asyncio.gather(*[check_port(ip, p, time_out) for p in ports])
+    if all(state is PortState.UNKNOWN for state in states):
+        return None
+    return [p for p, state in zip(ports, states) if state is PortState.OPEN]
 
 
 async def full_port_scan(ip: str, time_out: float = 0.5, workers: int = 1024,

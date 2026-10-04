@@ -70,7 +70,8 @@ Ping times are in milliseconds. In the first column, G marks your gateway and * 
 | F1 or ? | help |
 | F3 or / | search (F3 again for the next match) |
 | F4 or \ | filter the table |
-| F5 or Space | pause the display (pinging carries on) |
+| F5 | rescan names, MAC addresses, ports and the network |
+| F7 or Space | pause the display (pinging carries on) |
 | F6 or >, or click a heading | sort |
 | Esc | close a window or clear the filter, otherwise quit |
 | F10 or q | quit |

@@ -45,6 +45,14 @@ def retry_delay(attempts: int) -> float:
     return min(RETRY_MAX, RETRY_LATER * 2 ** (attempts - len(RETRY_SOON) - 1))
 
 
+# A port scan that learned nothing is retried more conservatively, it's 50 connections each time.
+PORT_RETRY_FIRST = 10.0  # doubling from here
+
+
+def port_retry_delay(attempts: int) -> float:
+    return min(RETRY_MAX, PORT_RETRY_FIRST * 2 ** (attempts - 1))
+
+
 @dataclass
 class Host:
     ip: str
@@ -60,6 +68,8 @@ class Host:
     name_retry_at: float = math.inf
     mac_attempts: int = 0
     mac_retry_at: float = math.inf
+    ports_attempts: int = 0
+    ports_retry_at: float = math.inf
 
     @property
     def sort_key(self):
@@ -85,6 +95,7 @@ class Monitor:
         self._unexplored = [str(ip) for ip in hosts]
         self._explore_pos = 0
         self._first_pass = True
+        self._tasks: asyncio.TaskGroup | None = None  # while running
         self._port_limit = asyncio.Semaphore(MAX_PORT_SCANS)
         self._mac_limit = asyncio.Semaphore(MAX_MAC_SCANS)
         self._name_limit = asyncio.Semaphore(MAX_NAME_LOOKUPS)
@@ -122,6 +133,7 @@ class Monitor:
         of pings (and the ARP broadcasts for empty addresses) delays the replies and inflates the times.
         """
         async with asyncio.TaskGroup() as tg:
+            self._tasks = tg
             if self.internet is not None:
                 tg.create_task(self._watch(self.internet, tg))
             while True:
@@ -167,6 +179,26 @@ class Monitor:
             tg.create_task(self._lookup_name(host))
         if now >= host.mac_retry_at:
             tg.create_task(self._lookup_mac(host))
+        if self.port_scan and now >= host.ports_retry_at:
+            tg.create_task(self._scan_ports(host))
+
+    def rescan(self) -> bool:
+        """
+        Look up every host's name, MAC address and ports again, and sweep the network for new hosts.
+        Ping stats are kept, and so are earlier results if a lookup now finds nothing.
+
+        :return: False if the monitor isn't running yet
+        """
+        if self._tasks is None:
+            return False
+        self._explore_pos, self._first_pass = 0, True
+        for host in self.hosts.values():
+            host.name_attempts = host.mac_attempts = host.ports_attempts = 0
+            self._tasks.create_task(self._lookup_name(host))
+            self._tasks.create_task(self._lookup_mac(host))
+            if self.port_scan:
+                self._tasks.create_task(self._scan_ports(host))
+        return True
 
     async def _lookup_name(self, host: Host):
         host.name_retry_at = math.inf  # not while this one runs
@@ -193,5 +225,13 @@ class Monitor:
         host.mac_done = True
 
     async def _scan_ports(self, host: Host):
+        host.ports_retry_at = math.inf  # not while this one runs
         async with self._port_limit:
-            host.ports = await probe.quick_port_scan(host.ip)
+            ports = await probe.quick_port_scan(host.ip)
+        host.ports_attempts += 1
+        if ports is None:
+            host.ports_retry_at = time.monotonic() + port_retry_delay(host.ports_attempts)
+            if host.ports is None:
+                host.ports = []  # show nothing found, rather than scanning, until a retry knows better
+        else:
+            host.ports = ports
