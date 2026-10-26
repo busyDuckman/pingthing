@@ -51,7 +51,7 @@ It finds your local network by itself, or you can give it one.
 
 | Option | |
 |---|---|
-| `--range RANGE` | network to watch, eg: 192.168.0.0/24 (default: detect the local network) |
+| `--range RANGE` | network to watch, eg: 192.168.0.0/24, at most a /22 (default: detect the local network) |
 | `--time_out SECONDS` | time out for each ping (default: 1) |
 | `--interval SECONDS` | seconds between pings to each host (default: 2) |
 | `--view COLUMNS` | columns to show, from: flag, ip, ping, mean, best, worst, sd, up-time, last-outage, name, services, mac, manufacturer |

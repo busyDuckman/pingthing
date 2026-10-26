@@ -13,7 +13,7 @@ import ipaddress
 from pingthing import __version__
 from pingthing.columns import DEFAULT_VIEW, col_config
 from pingthing.monitor import Monitor
-from pingthing.netinfo import detect_network
+from pingthing.netinfo import SMALLEST_PREFIX, detect_network
 from pingthing.probe import choose_pinger
 from pingthing.ui import PingThingApp
 
@@ -21,7 +21,8 @@ from pingthing.ui import PingThingApp
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog='pingthing', description='Summary of your local network, htop style.')
     parser.add_argument('--range', type=str, required=False, default=None,
-                        help='network range, eg: 192.168.0.0/24 (default: detect the local network)')
+                        help=f'network range, eg: 192.168.0.0/24, at most a /{SMALLEST_PREFIX} '
+                             '(default: detect the local network)')
     parser.add_argument('--time_out', type=float, required=False, default=1.0,
                         help='time out for ping, in seconds (default: 1)')
     parser.add_argument('--interval', type=float, required=False, default=2.0,
@@ -44,6 +45,9 @@ def parse_args(argv=None) -> argparse.Namespace:
             args.range = ipaddress.IPv4Network(args.range, strict=False)
         except ValueError as e:
             parser.error(f"--range: {e}")
+        if args.range.prefixlen < SMALLEST_PREFIX:
+            parser.error(f"--range: {args.range} is too big, the largest allowed is a /{SMALLEST_PREFIX} "
+                         f"({2 ** (32 - SMALLEST_PREFIX)} addresses)")
 
     args.view = [c.strip() for c in args.view.split(",") if c.strip()]
     unknown = [c for c in args.view if c not in col_config]

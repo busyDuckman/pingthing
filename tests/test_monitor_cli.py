@@ -136,7 +136,14 @@ def test_args():
     assert args.bw
 
 
-@pytest.mark.parametrize("argv", [["--range", "nonsense"], ["--view", "ip,bogus"], ["--time_out", "0"]])
+def test_range_limit():
+    assert parse_args(["--range", "10.0.0.0/22"]).range.num_addresses == 1024
+    with pytest.raises(SystemExit):
+        parse_args(["--range", "10.0.0.0/21"])
+
+
+@pytest.mark.parametrize("argv", [["--range", "nonsense"], ["--range", "0.0.0.0/0"], ["--view", "ip,bogus"],
+                                  ["--time_out", "0"]])
 def test_bad_args(argv):
     with pytest.raises(SystemExit):
         parse_args(argv)
